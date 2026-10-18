@@ -1,9 +1,20 @@
-import { useState } from "react";
-import type { FormEvent } from "react";
-import type { Product, Sale, StockMovement } from "../../domain/types";
+// src/features/sales/SalesPage.tsx
+
+import { useMemo, useState } from "react";
+import type {
+  Product,
+  Sale,
+  SaleItem,
+  StockMovement,
+} from "../../domain/types";
 import { recordSale } from "../../domain/sales";
 import type { SaleLineInput } from "../../domain/sales";
 import { formatZMW } from "../../lib/money";
+
+interface CartLine {
+  productId: string;
+  quantity: number;
+}
 
 interface Props {
   products: Product[];
@@ -16,262 +27,374 @@ interface Props {
   ) => void;
 }
 
-const inputCls = "border rounded px-2 py-1 text-sm w-full";
-
 export function SalesPage({ products, movements, sales, onChange }: Props) {
-  const [selectedProductId, setSelectedProductId] = useState("");
-  const [qty, setQty] = useState("");
-  const [cart, setCart] = useState<SaleLineInput[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<{
-    receipt: string;
-    totalNgwee: number;
+  const [productId, setProductId] = useState<string>("");
+  const [qtyStr, setQtyStr] = useState("");
+  const [cart, setCart] = useState<CartLine[]>([]);
+  const [feedback, setFeedback] = useState<{
+    kind: "success" | "error";
+    message: string;
   } | null>(null);
 
-  const activeProducts = products
-    .filter((p) => p.active)
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const productMap = new Map(products.map((p) => [p.id, p]));
+  const productMap = useMemo(() => {
+    const m = new Map<string, Product>();
+    for (const p of products) m.set(p.id, p);
+    return m;
+  }, [products]);
 
-  const cartTotal = cart.reduce((sum, line) => {
-    const p = productMap.get(line.productId);
-    return sum + (p ? p.sellingPriceNgwee * line.quantity : 0);
-  }, 0);
+  const recentSales = useMemo(() => {
+    return [...sales]
+      .sort((a, b) => (a.soldAt < b.soldAt ? 1 : -1))
+      .slice(0, 10);
+  }, [sales]);
 
-  function addLine(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSuccess(null);
-
-    if (!selectedProductId) {
-      setError("Select a product");
-      return;
-    }
-    const qtyNum = parseInt(qty, 10);
-    if (!Number.isInteger(qtyNum) || qtyNum <= 0) {
-      setError("Quantity must be a positive integer");
-      return;
-    }
-
-    setCart((prev) => {
-      const existing = prev.find((l) => l.productId === selectedProductId);
-      if (existing) {
-        return prev.map((l) =>
-          l.productId === selectedProductId
-            ? { ...l, quantity: l.quantity + qtyNum }
-            : l,
-        );
-      }
-      return [...prev, { productId: selectedProductId, quantity: qtyNum }];
+  const cartItems = useMemo(() => {
+    return cart.map((line) => {
+      const p = productMap.get(line.productId);
+      const over = p ? line.quantity > p.quantity : false;
+      const unitPrice = p ? p.sellingPriceNgwee : 0;
+      const lineTotal = unitPrice * line.quantity;
+      return { line, product: p, over, unitPrice, lineTotal };
     });
+  }, [cart, productMap]);
 
-    setSelectedProductId("");
-    setQty("");
+  const cartTotalNgwee = cartItems.reduce((sum, i) => sum + i.lineTotal, 0);
+
+  function addLine() {
+    setFeedback(null);
+    if (!productId) {
+      setFeedback({ kind: "error", message: "Choose a product first." });
+      return;
+    }
+    const qty = Number(qtyStr);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      setFeedback({ kind: "error", message: "Enter a valid quantity." });
+      return;
+    }
+    if (!Number.isInteger(qty)) {
+      setFeedback({
+        kind: "error",
+        message: "Quantity must be a whole number.",
+      });
+      return;
+    }
+    setCart((prev) => {
+      const idx = prev.findIndex((l) => l.productId === productId);
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = { ...next[idx], quantity: next[idx].quantity + qty };
+        return next;
+      }
+      return [...prev, { productId, quantity: qty }];
+    });
+    setProductId("");
+    setQtyStr("");
   }
 
   function removeLine(productId: string) {
     setCart((prev) => prev.filter((l) => l.productId !== productId));
-    setError(null);
-    setSuccess(null);
   }
 
   function confirmSale() {
-    setError(null);
-    setSuccess(null);
+    setFeedback(null);
+    if (cart.length === 0) {
+      setFeedback({ kind: "error", message: "Cart is empty." });
+      return;
+    }
+
+    const lines: SaleLineInput[] = cart.map((l) => ({
+      productId: l.productId,
+      quantity: l.quantity,
+    }));
+
     try {
-      const result = recordSale(cart, products, movements, sales);
+      const result = recordSale(lines, products, movements, sales);
       onChange(result.products, result.movements, [...sales, result.sale]);
-      setSuccess({
-        receipt: result.sale.receiptNumber,
-        totalNgwee: result.sale.totalNgwee,
+      setFeedback({
+        kind: "success",
+        message: `Sale ${result.sale.receiptNumber} recorded — ${formatZMW(result.sale.totalNgwee)}.`,
       });
       setCart([]);
+      setProductId("");
+      setQtyStr("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to record sale");
+      setFeedback({
+        kind: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
-  const sortedSales = [...sales]
-    .sort((a, b) => b.soldAt.localeCompare(a.soldAt))
-    .slice(0, 15);
+  const fieldClass =
+    "w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500";
+  const labelClass = "block text-sm font-medium text-gray-700 mb-1";
 
   return (
-    <div className="space-y-6">
-      {success && (
-        <div className="bg-green-50 border border-green-200 text-green-800 rounded p-3 text-sm">
-          Sale recorded · <span className="font-mono">{success.receipt}</span> ·{" "}
-          <strong>{formatZMW(success.totalNgwee)}</strong>
-        </div>
-      )}
+    <div className="mx-auto max-w-5xl px-4 py-6 space-y-6">
+      <header>
+        <h1 className="text-2xl font-semibold text-gray-900">Sales</h1>
+        <p className="mt-1 text-sm text-gray-500">
+          Build a sale, confirm it, and review recent receipts.
+        </p>
+      </header>
 
-      <div className="bg-white rounded-lg border p-4">
-        <h2 className="text-sm font-semibold text-gray-700 mb-3">New sale</h2>
-        <form
-          onSubmit={addLine}
-          className="grid grid-cols-1 md:grid-cols-3 gap-3"
-        >
-          <label className="flex flex-col gap-1 text-sm md:col-span-1">
-            <span className="text-gray-700">Product</span>
-            <select
-              className={inputCls}
-              value={selectedProductId}
-              onChange={(e) => setSelectedProductId(e.target.value)}
-            >
-              <option value="">— Select product —</option>
-              {activeProducts.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.sku} · {p.name} ({formatZMW(p.sellingPriceNgwee)}, have{" "}
-                  {p.quantity})
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex flex-col gap-1 text-sm">
-            <span className="text-gray-700">Quantity</span>
-            <input
-              className={inputCls}
-              inputMode="numeric"
-              placeholder="e.g. 2"
-              value={qty}
-              onChange={(e) => setQty(e.target.value)}
-            />
-          </label>
-          <div className="flex items-end">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+        <section className="lg:col-span-3 rounded-lg border border-gray-200 bg-white shadow-sm">
+          <div className="border-b border-gray-100 px-4 py-3">
+            <h2 className="text-sm font-semibold text-gray-900">Add a line</h2>
+            <p className="text-xs text-gray-500">
+              Choosing an existing product adds to its quantity.
+            </p>
+          </div>
+          <div className="px-4 py-4 space-y-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <div className="sm:col-span-2">
+                <label htmlFor="sale-product" className={labelClass}>
+                  <span>Product</span>
+                </label>
+                <select
+                  id="sale-product"
+                  className={fieldClass}
+                  value={productId}
+                  onChange={(e) => setProductId(e.target.value)}
+                >
+                  <option value="">Select a product…</option>
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id} disabled={p.quantity <= 0}>
+                      {p.sku} — {p.name} ({p.quantity} in stock)
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label htmlFor="sale-qty" className={labelClass}>
+                  <span>Quantity</span>
+                </label>
+                <input
+                  id="sale-qty"
+                  inputMode="numeric"
+                  className={fieldClass}
+                  value={qtyStr}
+                  onChange={(e) => setQtyStr(e.target.value)}
+                  placeholder="0"
+                />
+              </div>
+            </div>
             <button
-              type="submit"
-              className="bg-blue-600 text-white rounded px-4 py-2 text-sm"
+              type="button"
+              onClick={addLine}
+              className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
             >
               Add line
             </button>
           </div>
-        </form>
-        {error && <p className="text-red-600 text-sm mt-2">{error}</p>}
-      </div>
+        </section>
 
-      <div className="bg-white rounded-lg border">
-        <div className="flex items-center justify-between px-4 py-3 border-b">
-          <h2 className="text-sm font-semibold text-gray-700">
-            Cart ({cart.length} line{cart.length === 1 ? "" : "s"})
-          </h2>
-          <span className="text-sm text-gray-700">
-            Total: <strong>{formatZMW(cartTotal)}</strong>
-          </span>
-        </div>
-        <table className="min-w-full text-sm">
-          <thead className="bg-gray-50 text-left">
-            <tr>
-              <th className="px-3 py-2">Product</th>
-              <th className="px-3 py-2 text-right">Qty</th>
-              <th className="px-3 py-2 text-right">Unit price</th>
-              <th className="px-3 py-2 text-right">Line total</th>
-              <th className="px-3 py-2"></th>
-            </tr>
-          </thead>
-          <tbody>
-            {cart.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-3 py-6 text-center text-gray-500">
-                  No lines yet — add a product above.
-                </td>
-              </tr>
-            )}
-            {cart.map((line) => {
-              const p = productMap.get(line.productId);
-              if (!p) return null;
-              const lineTotal = p.sellingPriceNgwee * line.quantity;
-              const overStock = line.quantity > p.quantity;
-              return (
-                <tr key={line.productId} className="border-t">
-                  <td className="px-3 py-2">
-                    <div>
-                      {p.sku} · {p.name}
-                    </div>
-                    {overStock && (
-                      <div className="text-xs text-red-600">
-                        Only {p.quantity} in stock
-                      </div>
-                    )}
-                  </td>
-                  <td
-                    className={`px-3 py-2 text-right ${
-                      overStock ? "text-red-600 font-semibold" : ""
+        <section className="lg:col-span-2 rounded-lg border border-gray-200 bg-white shadow-sm flex flex-col">
+          <div className="border-b border-gray-100 px-4 py-3">
+            <h2 className="text-sm font-semibold text-gray-900">Cart</h2>
+            <p className="text-xs text-gray-500">{cart.length} line(s)</p>
+          </div>
+
+          <div className="px-4 py-4 flex-1">
+            {cart.length === 0 ? (
+              <div className="flex h-full min-h-35 flex-col items-center justify-center text-center">
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="28"
+                  height="28"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  className="text-gray-300"
+                >
+                  <circle cx="9" cy="21" r="1" />
+                  <circle cx="20" cy="21" r="1" />
+                  <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+                </svg>
+                <p className="mt-2 text-sm text-gray-500">No lines yet.</p>
+              </div>
+            ) : (
+              <ul className="space-y-2">
+                {cartItems.map((item) => (
+                  <li
+                    key={item.line.productId}
+                    className={`rounded-md border px-3 py-2.5 ${
+                      item.over
+                        ? "border-red-200 bg-red-50"
+                        : "border-gray-200 bg-white"
                     }`}
                   >
-                    {line.quantity}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    {formatZMW(p.sellingPriceNgwee)}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    {formatZMW(lineTotal)}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    <button
-                      className="text-red-600 hover:underline text-sm"
-                      onClick={() => removeLine(line.productId)}
-                    >
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        <div className="px-4 py-3 border-t flex justify-end">
-          <button
-            className="bg-blue-600 text-white rounded px-4 py-2 text-sm disabled:opacity-50"
-            disabled={cart.length === 0}
-            onClick={confirmSale}
-          >
-            Confirm sale
-          </button>
-        </div>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-medium text-gray-900">
+                          {item.product ? item.product.name : "Unknown product"}
+                        </p>
+                        <p className="font-mono text-xs text-gray-500">
+                          {item.product ? item.product.sku : "—"}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        aria-label="Remove line"
+                        onClick={() => removeLine(item.line.productId)}
+                        className="shrink-0 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-red-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          width="16"
+                          height="16"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polyline points="3 6 5 6 21 6" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        </svg>
+                      </button>
+                    </div>
+                    <div className="mt-1.5 flex items-center justify-between text-sm">
+                      <span className="text-gray-600">
+                        {item.line.quantity} × {formatZMW(item.unitPrice)}
+                      </span>
+                      <span className="font-medium text-gray-900">
+                        {formatZMW(item.lineTotal)}
+                      </span>
+                    </div>
+                    {item.over && (
+                      <p className="mt-1 text-xs font-medium text-red-700">
+                        Only {item.product ? item.product.quantity : 0} in stock
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {cart.length > 0 && (
+            <div className="border-t border-gray-100 px-4 py-3 space-y-3">
+              <div className="flex items-baseline justify-between">
+                <span className="text-sm text-gray-500">Total</span>
+                <span className="text-2xl font-bold text-gray-900">
+                  {formatZMW(cartTotalNgwee)}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={confirmSale}
+                className="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+              >
+                Confirm sale
+              </button>
+            </div>
+          )}
+        </section>
       </div>
 
-      <div>
-        <h2 className="text-sm font-semibold text-gray-700 mb-2">
-          Recent sales
-        </h2>
-        <div className="overflow-x-auto bg-white rounded-lg border">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 text-left">
-              <tr>
-                <th className="px-3 py-2">Receipt</th>
-                <th className="px-3 py-2">When</th>
-                <th className="px-3 py-2 text-right">Items</th>
-                <th className="px-3 py-2 text-right">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedSales.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={4}
-                    className="px-3 py-6 text-center text-gray-500"
-                  >
-                    No sales yet.
-                  </td>
-                </tr>
-              )}
-              {sortedSales.map((s) => (
-                <tr key={s.id} className="border-t">
-                  <td className="px-3 py-2 font-mono">{s.receiptNumber}</td>
-                  <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
-                    {new Date(s.soldAt).toLocaleString()}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    {s.items.reduce((n, i) => n + i.quantity, 0)}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    {formatZMW(s.totalNgwee)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {feedback && (
+        <div
+          role="alert"
+          className={`flex items-start gap-2 rounded-md border px-4 py-3 text-sm ${
+            feedback.kind === "success"
+              ? "border-green-200 bg-green-50 text-green-700"
+              : "border-red-200 bg-red-50 text-red-700"
+          }`}
+        >
+          {feedback.kind === "success" ? (
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="mt-0.5 shrink-0"
+            >
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14" />
+              <polyline points="22 4 12 14.01 9 11.01" />
+            </svg>
+          ) : (
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="mt-0.5 shrink-0"
+            >
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+          )}
+          <span>{feedback.message}</span>
         </div>
-      </div>
+      )}
+
+      <section className="rounded-lg border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-100 px-4 py-3">
+          <h2 className="text-sm font-semibold text-gray-900">Recent sales</h2>
+        </div>
+        {recentSales.length === 0 ? (
+          <div className="px-4 py-12 text-center">
+            <p className="text-sm text-gray-500">No sales recorded yet.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 text-sm">
+              <thead className="bg-gray-50">
+                <tr className="text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <th className="px-4 py-3">Receipt</th>
+                  <th className="px-4 py-3">When</th>
+                  <th className="px-4 py-3 text-right">Items</th>
+                  <th className="px-4 py-3 text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {recentSales.map((s) => (
+                  <tr
+                    key={s.id}
+                    className={
+                      s.status === "voided" ? "opacity-60" : "hover:bg-gray-50"
+                    }
+                  >
+                    <td className="px-4 py-3 font-mono text-gray-900">
+                      {s.receiptNumber}
+                    </td>
+                    <td className="px-4 py-3 whitespace-nowrap text-gray-500">
+                      {new Date(s.soldAt).toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-700">
+                      {countItems(s.items)}
+                    </td>
+                    <td className="px-4 py-3 text-right font-medium text-gray-900">
+                      {formatZMW(s.totalNgwee)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   );
+}
+
+function countItems(items: SaleItem[]): number {
+  return items.reduce((sum, i) => sum + i.quantity, 0);
 }

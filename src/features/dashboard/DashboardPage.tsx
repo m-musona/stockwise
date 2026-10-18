@@ -1,3 +1,7 @@
+// src/features/dashboard/DashboardPage.tsx
+
+import { useMemo } from "react";
+import type { ReactNode } from "react";
 import type { Product, Sale } from "../../domain/types";
 import {
   inventoryCostValue,
@@ -14,233 +18,476 @@ interface Props {
 }
 
 export function DashboardPage({ products, sales, onNavigate }: Props) {
-  const now = new Date();
-  const startOfDay = new Date(now);
-  startOfDay.setHours(0, 0, 0, 0);
-  const endOfDay = new Date(now);
-  endOfDay.setHours(23, 59, 59, 999);
-
-  const todayRevenue = totalRevenue(
-    sales,
-    startOfDay.toISOString(),
-    endOfDay.toISOString(),
+  const activeProducts = useMemo(
+    () => products.filter((p) => p.active),
+    [products],
   );
+  const unitsInStock = useMemo(() => totalUnitsInStock(products), [products]);
+  const inventoryValueNgwee = useMemo(
+    () => inventoryCostValue(products),
+    [products],
+  );
+  const lowList = useMemo(() => lowStockProducts(products), [products]);
+  const lowCount = lowList.length;
 
-  const totalProducts = products.filter((p) => p.active).length;
-  const unitsInStock = totalUnitsInStock(products);
-  const inventoryValue = inventoryCostValue(products);
-  const lowStock = lowStockProducts(products);
-
-  // Revenue for the last 7 days (oldest → newest)
-  const chartDays = Array.from({ length: 7 }, (_, i) => {
-    const dayStart = new Date(now);
-    dayStart.setDate(dayStart.getDate() - (6 - i));
-    dayStart.setHours(0, 0, 0, 0);
-    const dayEnd = new Date(dayStart);
-    dayEnd.setHours(23, 59, 59, 999);
-    const revenue = totalRevenue(
-      sales,
-      dayStart.toISOString(),
-      dayEnd.toISOString(),
+  const { todayRevenueNgwee, dailyBuckets } = useMemo(() => {
+    const now = new Date();
+    const startOfDay = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      0,
+      0,
+      0,
+      0,
     );
-    return {
-      label: dayStart.toLocaleDateString(undefined, { weekday: "short" }),
-      dateLabel: dayStart.toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-      }),
-      revenue,
-    };
-  });
-  const maxRevenue = Math.max(...chartDays.map((d) => d.revenue), 1);
+    const endOfDay = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate(),
+      23,
+      59,
+      59,
+      999,
+    );
+    const todayRevenue = totalRevenue(
+      sales,
+      startOfDay.toISOString(),
+      endOfDay.toISOString(),
+    );
 
-  const recentSales = [...sales]
-    .sort((a, b) => b.soldAt.localeCompare(a.soldAt))
-    .slice(0, 5);
+    const buckets: { label: string; date: Date; revenueNgwee: number }[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const day = new Date(
+        now.getFullYear(),
+        now.getMonth(),
+        now.getDate() - i,
+        0,
+        0,
+        0,
+        0,
+      );
+      const dStart = new Date(day);
+      const dEnd = new Date(
+        day.getFullYear(),
+        day.getMonth(),
+        day.getDate(),
+        23,
+        59,
+        59,
+        999,
+      );
+      const rev = totalRevenue(sales, dStart.toISOString(), dEnd.toISOString());
+      buckets.push({
+        label: day.toLocaleDateString(undefined, { weekday: "short" }),
+        date: day,
+        revenueNgwee: rev,
+      });
+    }
+    return { todayRevenueNgwee: todayRevenue, dailyBuckets: buckets };
+  }, [sales]);
+
+  const recentSales = useMemo(() => {
+    return [...sales]
+      .sort((a, b) => (a.soldAt < b.soldAt ? 1 : -1))
+      .slice(0, 5);
+  }, [sales]);
+
+  const maxBarNgwee = Math.max(1, ...dailyBuckets.map((b) => b.revenueNgwee));
+  const todayLabel = new Date().toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
 
   return (
-    <div className="space-y-6">
-      {/* Quick actions */}
-      <div className="flex flex-wrap gap-2">
-        <button
-          onClick={() => onNavigate("products")}
-          className="bg-blue-600 text-white rounded px-3 py-2 text-sm"
-        >
-          + Add product
-        </button>
-        <button
-          onClick={() => onNavigate("inventory")}
-          className="border rounded px-3 py-2 text-sm"
-        >
-          Receive stock
-        </button>
-        <button
-          onClick={() => onNavigate("sales")}
-          className="border rounded px-3 py-2 text-sm"
-        >
-          Record sale
-        </button>
-      </div>
+    <div className="mx-auto max-w-5xl px-4 py-6 space-y-6">
+      <header className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold text-gray-900">Dashboard</h1>
+          <p className="mt-1 text-sm text-gray-500">{todayLabel}</p>
+        </div>
+      </header>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <Card label="Total products" value={String(totalProducts)} />
-        <Card label="Units in stock" value={String(unitsInStock)} />
-        <Card label="Inventory value" value={formatZMW(inventoryValue)} />
-        <Card label="Today's revenue" value={formatZMW(todayRevenue)} />
-        <Card
-          label="Low-stock items"
-          value={String(lowStock.length)}
-          tone={lowStock.length > 0 ? "warn" : "ok"}
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <SummaryCard
+          label="Today's revenue"
+          value={formatZMW(todayRevenueNgwee)}
+          accent="blue"
+          icon={
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="12" y1="1" x2="12" y2="23" />
+              <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
+            </svg>
+          }
         />
-      </div>
+        <SummaryCard
+          label="Products (active)"
+          value={String(activeProducts.length)}
+          accent="gray"
+          icon={
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M20.91 8.84 8.56 2.23a1.93 1.93 0 0 0-1.66 0L2.6 4.45a1.93 1.93 0 0 0 0 3.42l12.35 6.61a1.93 1.93 0 0 0 1.66 0l4.3-2.22a1.93 1.93 0 0 0 0-3.42Z" />
+              <path d="m22 8.86-7.54 4.04a1.93 1.93 0 0 1-1.66 0L2 8.86" />
+              <path d="m22 11.86-9.54 4.84a1.93 1.93 0 0 1-1.66 0L2 11.86" />
+              <path d="M13 22V8" />
+            </svg>
+          }
+        />
+        <SummaryCard
+          label="Units in stock"
+          value={String(unitsInStock)}
+          accent="gray"
+          icon={
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+              <path d="M3.27 6.96 12 12.01l8.73-5.05" />
+              <path d="M12 22.08V12" />
+            </svg>
+          }
+        />
+        <SummaryCard
+          label="Inventory value"
+          value={formatZMW(inventoryValueNgwee)}
+          accent="gray"
+          icon={
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 3v18h18" />
+              <path d="M7 14l3-3 3 3 4-4" />
+            </svg>
+          }
+        />
+        <SummaryCard
+          label="Low stock"
+          value={String(lowCount)}
+          accent={lowCount > 0 ? "amber" : "green"}
+          icon={
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+          }
+        />
+      </section>
 
-      {/* 7-day revenue chart */}
-      <div className="bg-white rounded-lg border p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-sm font-semibold text-gray-700">
+      <section className="rounded-lg border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-100 px-4 py-3">
+          <h2 className="text-sm font-semibold text-gray-900">
             Revenue — last 7 days
           </h2>
-          <span className="text-xs text-gray-500">
-            Peak: {formatZMW(maxRevenue)}
-          </span>
         </div>
-        <div className="flex items-end gap-2 h-40">
-          {chartDays.map((d) => {
-            const heightPct = Math.round((d.revenue / maxRevenue) * 100);
-            return (
-              <div
-                key={d.dateLabel}
-                className="flex-1 flex flex-col items-center gap-1"
-              >
-                <div className="text-xs text-gray-700">
-                  {d.revenue > 0 ? formatZMW(d.revenue) : "—"}
-                </div>
-                <div className="w-full flex items-end h-24 bg-gray-100 rounded">
+        <div className="px-4 py-5">
+          <div className="flex items-end justify-between gap-2 h-48">
+            {dailyBuckets.map((b, i) => {
+              const heightPct = (b.revenueNgwee / maxBarNgwee) * 100;
+              const isToday = i === dailyBuckets.length - 1;
+              return (
+                <div
+                  key={i}
+                  className="group relative flex flex-1 flex-col items-center justify-end h-full"
+                >
+                  <div className="absolute -top-1 left-1/2 -translate-x-1/2 -translate-y-full opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap rounded bg-gray-900 px-2 py-1 text-xs font-medium text-white shadow">
+                    {formatZMW(b.revenueNgwee)}
+                  </div>
+                  <span className="mb-1 text-[11px] font-medium text-gray-500">
+                    {b.revenueNgwee > 0 ? formatZMW(b.revenueNgwee) : "—"}
+                  </span>
                   <div
-                    className="w-full bg-blue-500 rounded"
+                    className={`w-full rounded-t-md transition-colors ${
+                      isToday
+                        ? "bg-blue-600"
+                        : "bg-blue-200 group-hover:bg-blue-300"
+                    }`}
                     style={{
-                      height: `${Math.max(heightPct, d.revenue > 0 ? 4 : 0)}%`,
+                      height: `${Math.max(heightPct, b.revenueNgwee > 0 ? 4 : 1)}%`,
                     }}
                   />
+                  <span
+                    className={`mt-2 text-xs ${
+                      isToday ? "font-semibold text-gray-900" : "text-gray-500"
+                    }`}
+                  >
+                    {b.label}
+                  </span>
                 </div>
-                <div className="text-xs text-gray-500">{d.label}</div>
-              </div>
-            );
-          })}
+              );
+            })}
+          </div>
         </div>
+      </section>
+
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <section className="rounded-lg border border-gray-200 bg-white shadow-sm">
+          <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+            <h2 className="text-sm font-semibold text-gray-900">Low stock</h2>
+            <span
+              className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+                lowCount > 0
+                  ? "border-amber-200 bg-amber-50 text-amber-700"
+                  : "border-green-200 bg-green-50 text-green-700"
+              }`}
+            >
+              {lowCount} item{lowCount === 1 ? "" : "s"}
+            </span>
+          </div>
+          {lowList.length === 0 ? (
+            <div className="px-4 py-10 text-center">
+              <p className="text-sm text-gray-500">
+                All products are above their reorder level.
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200 text-sm">
+                <thead className="bg-gray-50">
+                  <tr className="text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th className="px-4 py-3">SKU</th>
+                    <th className="px-4 py-3">Product</th>
+                    <th className="px-4 py-3 text-right">On hand</th>
+                    <th className="px-4 py-3 text-right">Reorder</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {lowList.map((p) => (
+                    <tr key={p.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 font-mono text-gray-700">
+                        {p.sku}
+                      </td>
+                      <td className="px-4 py-3 font-medium text-gray-900">
+                        {p.name}
+                      </td>
+                      <td className="px-4 py-3 text-right font-medium text-amber-700">
+                        {p.quantity}
+                      </td>
+                      <td className="px-4 py-3 text-right text-gray-500">
+                        {p.reorderLevel}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+
+        <section className="rounded-lg border border-gray-200 bg-white shadow-sm">
+          <div className="border-b border-gray-100 px-4 py-3">
+            <h2 className="text-sm font-semibold text-gray-900">
+              Recent sales
+            </h2>
+          </div>
+          {recentSales.length === 0 ? (
+            <div className="px-4 py-10 text-center">
+              <p className="text-sm text-gray-500">No sales recorded yet.</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200 text-sm">
+                <thead className="bg-gray-50">
+                  <tr className="text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th className="px-4 py-3">Receipt</th>
+                    <th className="px-4 py-3">When</th>
+                    <th className="px-4 py-3 text-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {recentSales.map((s) => (
+                    <tr
+                      key={s.id}
+                      className={
+                        s.status === "voided"
+                          ? "opacity-60"
+                          : "hover:bg-gray-50"
+                      }
+                    >
+                      <td className="px-4 py-3 font-mono text-gray-900">
+                        {s.receiptNumber}
+                      </td>
+                      <td className="px-4 py-3 whitespace-nowrap text-gray-500">
+                        {new Date(s.soldAt).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-3 text-right font-medium text-gray-900">
+                        {formatZMW(s.totalNgwee)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
       </div>
 
-      {/* Low-stock table */}
-      <div>
-        <h2 className="text-sm font-semibold text-gray-700 mb-2">
-          Low-stock alerts ({lowStock.length})
-        </h2>
-        <div className="overflow-x-auto bg-white rounded-lg border">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 text-left">
-              <tr>
-                <th className="px-3 py-2">SKU</th>
-                <th className="px-3 py-2">Product</th>
-                <th className="px-3 py-2 text-right">On hand</th>
-                <th className="px-3 py-2 text-right">Reorder</th>
-              </tr>
-            </thead>
-            <tbody>
-              {lowStock.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={4}
-                    className="px-3 py-6 text-center text-gray-500"
-                  >
-                    All products above reorder level.
-                  </td>
-                </tr>
-              )}
-              {lowStock.map((p) => (
-                <tr key={p.id} className="border-t">
-                  <td className="px-3 py-2 font-mono">{p.sku}</td>
-                  <td className="px-3 py-2">{p.name}</td>
-                  <td className="px-3 py-2 text-right text-amber-700 font-semibold">
-                    {p.quantity}
-                  </td>
-                  <td className="px-3 py-2 text-right text-gray-600">
-                    {p.reorderLevel}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      <section className="rounded-lg border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-100 px-4 py-3">
+          <h2 className="text-sm font-semibold text-gray-900">Quick actions</h2>
         </div>
-      </div>
-
-      {/* Recent sales */}
-      <div>
-        <h2 className="text-sm font-semibold text-gray-700 mb-2">
-          Recent sales
-        </h2>
-        <div className="overflow-x-auto bg-white rounded-lg border">
-          <table className="min-w-full text-sm">
-            <thead className="bg-gray-50 text-left">
-              <tr>
-                <th className="px-3 py-2">Receipt</th>
-                <th className="px-3 py-2">When</th>
-                <th className="px-3 py-2 text-right">Items</th>
-                <th className="px-3 py-2 text-right">Total</th>
-              </tr>
-            </thead>
-            <tbody>
-              {recentSales.length === 0 && (
-                <tr>
-                  <td
-                    colSpan={4}
-                    className="px-3 py-6 text-center text-gray-500"
-                  >
-                    No sales yet.
-                  </td>
-                </tr>
-              )}
-              {recentSales.map((s) => (
-                <tr key={s.id} className="border-t">
-                  <td className="px-3 py-2 font-mono">{s.receiptNumber}</td>
-                  <td className="px-3 py-2 text-gray-600 whitespace-nowrap">
-                    {new Date(s.soldAt).toLocaleString()}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    {s.items.reduce((n, i) => n + i.quantity, 0)}
-                  </td>
-                  <td className="px-3 py-2 text-right">
-                    {formatZMW(s.totalNgwee)}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="grid grid-cols-1 gap-3 px-4 py-4 sm:grid-cols-3">
+          <QuickAction
+            label="Manage products"
+            description="Add, edit and search your catalogue"
+            onClick={() => onNavigate("products")}
+            icon={
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M20.91 8.84 8.56 2.23a1.93 1.93 0 0 0-1.66 0L2.6 4.45a1.93 1.93 0 0 0 0 3.42l12.35 6.61a1.93 1.93 0 0 0 1.66 0l4.3-2.22a1.93 1.93 0 0 0 0-3.42Z" />
+                <path d="m22 8.86-9.54 4.84a1.93 1.93 0 0 1-1.66 0L2 8.86" />
+              </svg>
+            }
+          />
+          <QuickAction
+            label="Receive stock"
+            description="Record deliveries and adjustments"
+            onClick={() => onNavigate("inventory")}
+            icon={
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M12 5v14" />
+                <path d="M19 12l-7 7-7-7" />
+              </svg>
+            }
+          />
+          <QuickAction
+            label="Make a sale"
+            description="Ring up a new transaction"
+            onClick={() => onNavigate("sales")}
+            icon={
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <circle cx="9" cy="21" r="1" />
+                <circle cx="20" cy="21" r="1" />
+                <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+              </svg>
+            }
+          />
         </div>
-      </div>
+      </section>
     </div>
   );
 }
 
-function Card({
-  label,
-  value,
-  tone = "neutral",
-}: {
+function SummaryCard(props: {
   label: string;
   value: string;
-  tone?: "neutral" | "warn" | "ok";
+  accent: "blue" | "gray" | "amber" | "green";
+  icon: ReactNode;
 }) {
-  const toneCls =
-    tone === "warn"
-      ? "text-amber-700"
-      : tone === "ok"
-        ? "text-green-700"
-        : "text-gray-900";
+  const { label, value, accent, icon } = props;
+  const accentMap: Record<"blue" | "gray" | "amber" | "green", string> = {
+    blue: "bg-blue-50 text-blue-600",
+    gray: "bg-gray-100 text-gray-500",
+    amber: "bg-amber-50 text-amber-600",
+    green: "bg-green-50 text-green-600",
+  };
   return (
-    <div className="bg-white rounded-lg border p-3">
-      <div className="text-xs text-gray-500">{label}</div>
-      <div className={`text-xl font-semibold ${toneCls}`}>{value}</div>
+    <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-medium uppercase tracking-wide text-gray-500">
+          {label}
+        </span>
+        <span
+          className={`flex h-8 w-8 items-center justify-center rounded-md ${accentMap[accent]}`}
+        >
+          {icon}
+        </span>
+      </div>
+      <p className="mt-2 text-2xl font-bold text-gray-900">{value}</p>
     </div>
+  );
+}
+
+function QuickAction(props: {
+  label: string;
+  description: string;
+  onClick: () => void;
+  icon: ReactNode;
+}) {
+  const { label, description, onClick, icon } = props;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex items-start gap-3 rounded-md border border-gray-200 bg-white p-3 text-left transition-colors hover:border-blue-300 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+    >
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-600">
+        {icon}
+      </span>
+      <span>
+        <span className="block text-sm font-semibold text-gray-900">
+          {label}
+        </span>
+        <span className="block text-xs text-gray-500">{description}</span>
+      </span>
+    </button>
   );
 }

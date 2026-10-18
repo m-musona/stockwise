@@ -24,8 +24,6 @@ StockWise answers five questions a shop owner actually asks:
 | ---------------------------- | -------------------------- | --------------------------- |
 | _[screenshot/inventory.png]_ | _[screenshot/reports.png]_ | _[screenshot/settings.png]_ |
 
-> Add screenshots to a `screenshot/` folder and replace the placeholders above once you have them.
-
 ---
 
 ## Features
@@ -89,7 +87,7 @@ Money is stored as **integer ngwee** (ZMW minor units, `1 ZMW = 100 ngwee`). Fin
 ## Run Locally
 
 ```bash
-git clone https://github.com/<your-username>/stockwise.git
+git clone https://github.com/m-musona/stockwise.git
 cd stockwise
 npm install
 npm run dev
@@ -202,4 +200,4 @@ MIT — see `LICENSE` file.
 
 ## Author
 
-**Musona Mutale** — first portfolio project, targeting Zambian small-business retail.
+**Mutale Musona** — first portfolio project, targeting Zambian small-business retail.

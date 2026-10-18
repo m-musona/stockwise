@@ -16,13 +16,13 @@ StockWise answers five questions a shop owner actually asks:
 
 ## Screenshots
 
-| Dashboard                    | Products                    | Sales                    |
-| ---------------------------- | --------------------------- | ------------------------ |
-| _[screenshot/dashboard.png]_ | _[screenshot/products.png]_ | _[screenshot/sales.png]_ |
+| Dashboard                              | Products                             | Sales                          |
+| -------------------------------------- | ------------------------------------ | ------------------------------ |
+| ![Dashboard](screenshot/dashboard.png) | ![Products](screenshot/products.png) | ![Sales](screenshot/sales.png) |
 
-| Inventory                    | Reports                    | Settings                    |
-| ---------------------------- | -------------------------- | --------------------------- |
-| _[screenshot/inventory.png]_ | _[screenshot/reports.png]_ | _[screenshot/settings.png]_ |
+| Inventory                              | Reports                            | Settings                             |
+| -------------------------------------- | ---------------------------------- | ------------------------------------ |
+| ![Inventory](screenshot/inventory.png) | ![Reports](screenshot/reports.png) | ![Settings](screenshot/settings.png) |
 
 ---
 
